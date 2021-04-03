@@ -191,16 +191,16 @@ def Find_NewUsersItems(AllDF_start,AllDF_list,user_column,item_column,N_steps=8)
 
 """### 4.Dataset Adjustments """
 
-def get_NEWHoldout(HOLDOUT_list,userID_dict,itemID_dict,AllUpdtUSERS_,AllUpdtITEMS_,n):
+def get_NEWHoldout(HOLDOUT_list,userID_dict,itemID_dict,AllUpdtUSERS_,AllUpdtITEMS_,userCol,itemCol,n):
     newHOLDOUT_LIST =  []
     for i in tqdm(range(n)):
         Updt_Items  =   AllUpdtITEMS_[i]
         Updt_Users  =   AllUpdtUSERS_[i]     
-        newHOLDOUT_ =   HOLDOUT_list[i].loc[(HOLDOUT_list[i]['productId'].isin(Updt_Items)) & (HOLDOUT_list[i]['userId'].isin(Updt_Users))]#
-        newHOLDOUT_ =   newHOLDOUT_[['userId','productId']]
+        newHOLDOUT_ =   HOLDOUT_list[i].loc[(HOLDOUT_list[i][itemCol].isin(Updt_Items)) & (HOLDOUT_list[i][userCol].isin(Updt_Users))]#
+        newHOLDOUT_ =   newHOLDOUT_[[userCol,itemCol]]
 
-        prevUser_ID =   newHOLDOUT_['userId'].values  ##
-        prevItems_ID =  newHOLDOUT_['productId'].values   #
+        prevUser_ID =   newHOLDOUT_[userCol].values  #
+        prevItems_ID =  newHOLDOUT_[itemCol].values   #
         Updted_UserID = [userID_dict.get(user) for user in prevUser_ID]   
         Updted_ItemID = [itemID_dict.get(item) for item in prevItems_ID]
 
@@ -210,16 +210,16 @@ def get_NEWHoldout(HOLDOUT_list,userID_dict,itemID_dict,AllUpdtUSERS_,AllUpdtITE
     return  newHOLDOUT_LIST
 
 
-def adjustedAllDF(AllDF_list,userID_dict,itemID_dict,AllUpdtUSERS_,AllUpdtITEMS_,n):
+def adjustedAllDF(AllDF_list,userID_dict,itemID_dict,AllUpdtUSERS_,AllUpdtITEMS_,userCol,itemCol,n):
     newAllDF_list =[]
     for i in range(n):
-        AllDF_list[i] = AllDF_list[i][['userId','productId']]
+        AllDF_list[i] = AllDF_list[i][[userCol,itemCol]]
         Updt_Items    = AllUpdtITEMS_[i]
         Updt_Users    = AllUpdtUSERS_[i]     
-        allnew_df     = AllDF_list[i].loc[(AllDF_list[i]['productId'].isin(Updt_Items)) & (AllDF_list[i]['userId'].isin(Updt_Users))]
+        allnew_df     = AllDF_list[i].loc[(AllDF_list[i][itemCol].isin(Updt_Items)) & (AllDF_list[i][userCol].isin(Updt_Users))]
 
-        prevUser_ID =   allnew_df['userId'].values  
-        prevItems_ID =  allnew_df['productId'].values   
+        prevUser_ID =   allnew_df[userCol].values  
+        prevItems_ID =  allnew_df[itemCol].values   
         Updted_UserID = [userID_dict.get(user) for user in prevUser_ID]   
         Updted_ItemID = [itemID_dict.get(item) for item in prevItems_ID]
         allnew_df['Updated_UserID'] = Updted_UserID
@@ -227,19 +227,32 @@ def adjustedAllDF(AllDF_list,userID_dict,itemID_dict,AllUpdtUSERS_,AllUpdtITEMS_
         newAllDF_list.append(allnew_df)
     return newAllDF_list
 
-def adjustedPSI_DF(PSITest_list,userID_dict,itemID_dict,AllUpdtUSERS_,AllUpdtITEMS_,n):
+def adjustedPSI_DF(PSITest_list,userID_dict,itemID_dict,AllUpdtUSERS_,AllUpdtITEMS_,userCol,itemCol,n):
     new_PSIDFlist =[]
     for i in range(n):
-        PSITest_list[i] = PSITest_list[i][['userId','productId']]
+        PSITest_list[i] = PSITest_list[i][[userCol,itemCol]]
         Updt_Items    = AllUpdtITEMS_[i]
         Updt_Users    = AllUpdtUSERS_[i]     
-        new_PSIdf     = PSITest_list[i].loc[(PSITest_list[i]['productId'].isin(Updt_Items)) & (PSITest_list[i]['userId'].isin(Updt_Users))]
+        new_PSIdf     = PSITest_list[i].loc[(PSITest_list[i][itemCol].isin(Updt_Items)) & (PSITest_list[i][userCol].isin(Updt_Users))]
 
-        prevUser_ID =   new_PSIdf['userId'].values  
-        prevItems_ID =  new_PSIdf['productId'].values   
+        prevUser_ID =   new_PSIdf[userCol].values  
+        prevItems_ID =  new_PSIdf[itemCol].values   
         Updted_UserID = [userID_dict.get(user) for user in prevUser_ID]   
         Updted_ItemID = [itemID_dict.get(item) for item in prevItems_ID]
         new_PSIdf['Updated_UserID'] = Updted_UserID
         new_PSIdf['Updated_ItemID'] = Updted_ItemID
         new_PSIDFlist.append(new_PSIdf)
     return new_PSIDFlist
+
+
+def ADJUST_mainDF(AMZB_DF,userID_dict,itemID_dict,AllUpdtUSERS_,AllUpdtITEMS_,userCol,itemCol):
+    Updt_ItemsLast = AllUpdtITEMS_[-1]
+    Updt_UsersLast = AllUpdtUSERS_[-1]
+    newAMZB_DF = AMZB_DF.loc[(AMZB_DF[itemCol].isin(Updt_ItemsLast)) & (AMZB_DF[userCol].isin(Updt_UsersLast))]
+    prevUser_ID =  newAMZB_DF[userCol].values  
+    prevItems_ID = newAMZB_DF[itemCol].values   
+    Updted_UserID = [userID_dict.get(user) for user in prevUser_ID]   
+    Updted_ItemID = [itemID_dict.get(item) for item in prevItems_ID]
+    newAMZB_DF['Updated_UserID'] = Updted_UserID
+    newAMZB_DF['Updated_ItemID'] = Updted_ItemID
+    return newAMZB_DF
