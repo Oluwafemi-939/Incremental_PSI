@@ -33,6 +33,13 @@ from collections import OrderedDict
 from scipy.sparse import csr_matrix, find
 from pandas.api.types import CategoricalDtype
 
+
+import implicit
+from scipy.sparse import coo_matrix
+from sklearn.preprocessing import MinMaxScaler
+from sklearn import metrics
+from sklearn.model_selection import train_test_split
+
 """### 1.Regular PSI """
 
 ##INPUTS: factorization of the rank-r matrix Y(0) = USV and the increment ΔA 
@@ -68,6 +75,161 @@ def last_psiTrainMat(A0,ΔA_train_matrix,k):
   for ΔA in tqdm(ΔA_train_matrix):
     U,S,V = integrator(U,S,V,ΔA)            ##the last U,S,V from this ΔA_train are the starting elements for the ΔA_test      
   return U,S,V
+
+
+"""### PureSVD """
+def pureSVD(SVDRatingMatrices, k):
+    Vsvd_list = []
+    for Rating_Mat in SVDRatingMatrices:
+        Usvd, Ssvd, VTsvd = svds(Rating_Mat, k=k)
+        Vsvd = VTsvd.T     
+        Vsvd_list.append(Vsvd)
+    return Vsvd_list
+
+
+"""### implicit ALS#####"""
+
+def auc_score(predictions, test):
+    fpr, tpr, thresholds = metrics.roc_curve(test, predictions)
+    return metrics.auc(fpr, tpr)
+
+                                                  ##takes rating matrix and masks a certain 20% 
+                                                  ##of the user-item interaction
+def TrainTest(ratings_matrix,pct_mask=0.2):
+    test_set = ratings_matrix.copy()              #making a copy of the rating matrix as text_set
+    test_set[test_set!=0]=1                       #storing this as a binary preference matrix 
+
+    train_set = ratings_matrix.copy() 
+    nonzero_inds = train_set.nonzero()            #get indices where interaction actually exist
+    nonzero_pairs = list(zip(nonzero_inds[0],     #user-item indices into list
+                          nonzero_inds[1]))   
+    random.seed(0) 
+    num_samples = int(np.ceil(pct_mask*len(nonzero_pairs)))  #num of samples to mask
+    samples = random.sample(nonzero_pairs, num_samples) 
+
+
+    user_inds = [i[0] for i in samples]             #Get the user row indices
+    item_inds = [i[1] for i in samples]            # Get the item column indices
+    train_set[user_inds, item_inds] = 0            # Assign all of the randomly chosen user-item pairs to zero
+    train_set.eliminate_zeros()                    # Get rid of zeros in sparse array storage after update to save space
+    return train_set, test_set, list(set(user_inds)) # Output the unique list of use
+
+
+def mean_auc(train_set,test_set,latent_features,masked_users) :
+    user_AUC = []
+    item_vectors = latent_features[1]                     #item latent features: matrix_V    
+    for user in masked_users:
+        train_row  = train_set[user,:].toarray().reshape(-1)  ##for each user in the training set
+        zero_index = np.where(train_row==0)                   ##get the index where interaction has not yet occurred 
+                                                              #extract the user latent features... 
+        user_vector = latent_features[0][user,:]              #get me each row in the predicted rating matrix--> 
+                                                              #user latent features: matrix_U
+        pred_ = user_vector.dot(item_vectors).toarray()[0,zero_index].reshape(-1)  #user prediction
+        actual_ = test_set[user,:].toarray()[0,zero_index].reshape(-1) 
+                                                            #to test with our system recommending popular item for every user
+        user_AUC.append(auc_score(pred_,actual_))
+        AVG_test_AUC = float('%.6f'%np.mean(user_AUC)) 
+    return AVG_test_AUC
+
+
+def tune_ALS(train_set,test_set,validation_set,als_param_grid):
+    best_auc   = 0
+    best_model = None
+    for i in tqdm(range(len(als_param_grid))):
+        alpha, reg, rank, iter = list(als_param_grid)[i]   
+        ALSmodel = implicit.als.AlternatingLeastSquares(
+                   factors=rank, regularization=reg, iterations=iter,use_gpu = False)
+        #train ALS model
+        Item_UsersMAT = (train_set.T * alpha).astype('double')
+        ALSmodel.fit(Item_UsersMAT, show_progress=True)                
+        user_vecs = ALSmodel.user_factors
+        item_vecs = ALSmodel.item_factors                                              
+        ##############        ##############                              
+        user_vecs_csr = sparse.csr_matrix(user_vecs)       #converting the ALS output to csr_matrix ,
+        item_vecs_csr = sparse.csr_matrix(item_vecs.T)     #and transposing th eitem vectors:
+        latent_features = [user_vecs_csr,item_vecs_csr]
+        test_auc  =  mean_auc(train_set,test_set,latent_features,validation_set)   #masked_users == VALIDATION SET
+
+        print('latent factors= {} ,regularization = {}:, n_iter = {}, alpha = {}, AUC= {}'.format(rank,reg,iter,alpha,test_auc))
+        if test_auc > best_auc:
+           best_auc  = test_auc
+           best_rank = rank
+           best_reg  = reg
+           best_iter = iter
+           best_alpha = alpha
+           best_model = ALSmodel
+    print('\n Best model; latent factors= {} , regularization = {}, n_iter = {}, alpha = {}, AUC = {}'.format(best_rank,
+                                                                              best_reg, best_iter,best_alpha,best_auc))
+    return best_rank, best_reg, best_iter,best_alpha,best_auc,best_model
+
+
+
+
+def nonzeros(m, row):
+    for index in range(m.indptr[row], m.indptr[row+1]):
+        yield m.indices[index], m.data[index]
+
+
+def least_squares_cg(Cui, X, Y, factors, U1, U2,reglr,cg_steps=3):
+    YtY = Y.T.dot(Y) + reglr * np.eye(factors)
+    for u in range(U1, U2):
+        # start from previous iteration
+        x = X[u]   #single user vec
+
+        # calculate residual r = (YtCuPu - (YtCuY.dot(Xu), without computing YtCuY
+        r = -YtY.dot(x)
+        for i, confidence in nonzeros(Cui, u):
+            r += (confidence - (confidence - 1) * Y[i].dot(x)) * Y[i]
+
+        p = r.copy()
+        rsold = r.dot(r)
+
+        for it in range(cg_steps):
+            # calculate Ap = YtCuYp - without actually calculating YtCuY
+            Ap = YtY.dot(p)
+            for i, confidence in nonzeros(Cui, u):
+                Ap += (confidence - 1) * Y[i].dot(p) * Y[i]
+
+            # standard CG update
+            alpha = rsold / p.dot(Ap)
+            x += alpha * p
+            r -= alpha * Ap
+            rsnew = r.dot(r)
+            p = r + (rsnew / rsold) * p
+            rsold = rsnew
+
+        X[u] = x
+
+
+def alternating_least_squares_cg(Cui,nuser_list,nItem_list,factors,alpha,reglr,iter):
+    Cui = Cui*alpha
+    users, items = Cui.shape  
+    X = np.random.rand(users, factors) * 0.01  # initialize factors randomly
+    Y = np.random.rand(items, factors) * 0.01
+    U_list, V_list = [],[]
+    Cui, Ciu = Cui.tocsr(), Cui.T.tocsr()
+    for U1,U2,I1,I2 in tqdm(zip(nuser_list,nuser_list[1:],nItem_list,nItem_list[1:])):
+        for iteration in range(iter):
+            least_squares_cg(Cui, X, Y,factors,U1, U2,reglr)   ##for users..
+            least_squares_cg(Ciu, Y, X,factors,I1, I2,reglr)   ##for items....
+        U_list.append(X)
+        V_list.append(Y)
+
+    return U_list, V_list
+     
+
+
+def getiALS_VUlist(bst_Model,UserItem_RatMAT,alpha):
+    V_list = []
+    U_list = []
+    for RatMAT in tqdm(UserItem_RatMAT):
+        Item_UsersMAT = (RatMAT.T*alpha).astype('double')
+        bst_Model.fit(Item_UsersMAT, show_progress=True)                
+        user_vecs = bst_Model.user_factors
+        item_vecs = bst_Model.item_factors
+        V_list.append(item_vecs)
+        U_list.append(user_vecs)
+    return V_list,U_list 
 
 """### 2.Incremental Update:
 

@@ -129,103 +129,255 @@ def getAll_HitRate(HOLDOUT_list,All_TOPN_PRED,user_column,item_column):
 
 
 
+            ########### MEAN RECIPROCAL RANK #################
+
+def MRR_Eval(Holdout,TopN_pred,item_column):
+    Ntest_users = Holdout.shape[0]
+    Eval_itemsVector  =  Holdout[[item_column]].to_numpy()
+    item_pos = np.where(Eval_itemsVector == TopN_pred)[1] +1  #eval item pos in pred_index1 
+    if item_pos.size:  ##if any hit
+       Hit_RR = (1/item_pos)  
+       MRR_ = np.divide(np.sum(Hit_RR),Ntest_users)  #mean of all reciprocal rank
+       return MRR_    
+    return 0
+
+def getAll_MRR_Eval(HOLDOUT_list,All_TOPN_PRED,item_column):
+    AllSteps_MRR = []
+    for Holdout, TopN_pred in zip(HOLDOUT_list,All_TOPN_PRED):  
+        MRR_ = MRR_Eval(Holdout,TopN_pred,item_column)
+        AllSteps_MRR.append(round(MRR_,6))
+
+    LowerBand, Avg_MRR, UpperBand  = mean_confidence_interval(AllSteps_MRR, confidence=0.95)
+    LowerBand = round(LowerBand,6)
+    Avg_MRR  = round(Avg_MRR,6)
+    UpperBand =round(UpperBand,6)
+    return AllSteps_MRR, LowerBand, Avg_MRR, UpperBand    
+
+#
+def TQDMgetAll_MRR_Eval(HOLDOUT_list,All_TOPN_PRED,item_column):
+    AllSteps_MRR = []
+    for Holdout, TopN_pred in tqdm(zip(HOLDOUT_list,All_TOPN_PRED)):  
+        MRR_ = MRR_Eval(Holdout,TopN_pred,item_column)
+        AllSteps_MRR.append(round(MRR_,6))
+
+    LowerBand, Avg_MRR, UpperBand  = mean_confidence_interval(AllSteps_MRR, confidence=0.95)
+    LowerBand = round(LowerBand,6)
+    Avg_MRR  = round(Avg_MRR,6)
+    UpperBand =round(UpperBand,6)
+    return AllSteps_MRR, LowerBand, Avg_MRR, UpperBand    
+
+######################################################################################
+
+
+
+
+
+"""### implicit ALS ###"""
+def ials_TopNPred(RatingMat,holdout,users_vec,items_vec,user_column, N):  #N == Top_N
+    TestUsers = holdout[user_column]            #prediction for holdout users alone
+    HOLDOUT_usersMat = RatingMat[TestUsers,:]   #this doubles as the "previously seen items"
+    testusers_vec = users_vec[TestUsers, :]
+    PVVT =  testusers_vec.dot(items_vec.T) 
+    users_column = HOLDOUT_usersMat.nonzero()[0]
+    items_column = HOLDOUT_usersMat.nonzero()[1]
+    args = np.array([users_column,items_column])
+    np.put(PVVT, np.ravel_multi_index(args, PVVT.shape),-np.inf)   #downsample previously seen items
+    TopN_pred = np.apply_along_axis(topN_Index, 1,PVVT,n = N)
+    return TopN_pred
+
+def ials_getALLPred(RatingMat_List,HOLDOUT_list,U_list,V_list,user_column,N):
+    All_TOPN_PRED = []
+    for RatMat,holdout,users_vec,items_vec in zip(RatingMat_List,HOLDOUT_list,U_list,V_list):
+        TopN_pred =  ials_TopNPred(RatMat,holdout,users_vec,items_vec,user_column, N)  
+        All_TOPN_PRED.append(TopN_pred)
+    return All_TOPN_PRED
+
+
+def ials_getALLPredTQDM(RatingMat_List,HOLDOUT_list,U_list,V_list,user_column,N):
+    All_TOPN_PRED = []
+    for RatMat,holdout,users_vec,items_vec in tqdm(zip(RatingMat_List,HOLDOUT_list,U_list,V_list)):  
+        TopN_pred = ials_TopNPred(RatMat,holdout,users_vec,items_vec,user_column, N)
+        All_TOPN_PRED.append(TopN_pred)
+    return All_TOPN_PRED
+
+
+def ials_ALLUSERSpred(RatingMat,users_vec,items_vec,N):  ##Prediction for all users ...||Not just Holdout
+    PVVT =  users_vec.dot(items_vec.T) 
+    users_column = RatingMat.nonzero()[0]
+    items_column = RatingMat.nonzero()[1]
+    args = np.array([users_column,items_column])
+    np.put(PVVT, np.ravel_multi_index(args, PVVT.shape),-np.inf)   ##downsample previously seen items
+    TopN_pred = np.apply_along_axis(topN_Index, 1,PVVT,n = N)
+    return TopN_pred
+
+def ialsALLPred_ALLUSERS(RatingMat_List,U_list,V_list,N):
+    All_TOPN_PRED = []
+    for RatMat,users_vec,items_vec in zip(RatingMat_List,U_list,V_list):  
+        TopN_pred = ials_ALLUSERSpred(RatMat,users_vec,items_vec,N) 
+        All_TOPN_PRED.append(TopN_pred)
+    return All_TOPN_PRED
+
+def TQDM_ialsALLPred_ALLUSERS(RatingMat_List,V_list,N):
+    All_TOPN_PRED = []
+    for RatMat,users_vec,items_vec in tqdm(zip(RatingMat_List,U_list,V_list)):  
+        TopN_pred = ials_ALLUSERSpred(RatMat,users_vec,items_vec,N) 
+        All_TOPN_PRED.append(TopN_pred)
+    return All_TOPN_PRED
+
+
+
+
+
+
+
+
 """### 3.Random Rec"""
 
-def TopN_RandomPred(RatingMat,holdout,user_column,N):   ##N == Top_N
-  TestUsers = holdout[user_column]
-  HOLDOUT_usersMat = RatingMat[TestUsers,:]    
-  N_users,N_items = HOLDOUT_usersMat.shape   
-  PVVT_RandScores = np.random.rand(N_users,N_items)   ##Assigns random scores to items
-  users_column = HOLDOUT_usersMat.nonzero()[0]
-  items_column = HOLDOUT_usersMat.nonzero()[1]
-  args = np.array([users_column,items_column])
-  np.put(PVVT_RandScores, np.ravel_multi_index(args, PVVT_RandScores.shape),-np.inf)   ##downsample previously seen items
-  TopN_pred = np.apply_along_axis(topN_Index, 1,PVVT_RandScores,n = N)
-  return TopN_pred
+# def TopN_RandomPred(RatingMat,holdout,user_column,N):   ##N == Top_N
+#   TestUsers = holdout[user_column]
+#   HOLDOUT_usersMat = RatingMat[TestUsers,:]    
+#   N_users,N_items = HOLDOUT_usersMat.shape   
+#   PVVT_RandScores = np.random.rand(N_users,N_items)   ##Assigns random scores to items
+#   users_column = HOLDOUT_usersMat.nonzero()[0]
+#   items_column = HOLDOUT_usersMat.nonzero()[1]
+#   args = np.array([users_column,items_column])
+#   np.put(PVVT_RandScores, np.ravel_multi_index(args, PVVT_RandScores.shape),-np.inf)   ##downsample previously seen items
+#   TopN_pred = np.apply_along_axis(topN_Index, 1,PVVT_RandScores,n = N)
+#   return TopN_pred
 
-def get_ALLRandPred(RatingMat_List,HOLDOUT_list,user_column,N):
-  All_RandPred = []
-  for RatingMat,holdout in tqdm(zip(RatingMat_List,HOLDOUT_list)):  
-    Rand_pred =  TopN_RandomPred(RatingMat,holdout,user_column, N)
-    All_RandPred.append(Rand_pred)
-  return All_RandPred
+# def get_ALLRandPred(RatingMat_List,HOLDOUT_list,user_column,N):
+#   All_RandPred = []
+#   for RatingMat,holdout in tqdm(zip(RatingMat_List,HOLDOUT_list)):  
+#     Rand_pred =  TopN_RandomPred(RatingMat,holdout,user_column, N)
+#     All_RandPred.append(Rand_pred)
+#   return All_RandPred
 
+
+# def getAll_RandomHitRate(HOLDOUT_list,All_RandPred,user_column,item_column):
+#   AllSteps_Hitrate = []
+#   for Holdout, Random_pred in zip(HOLDOUT_list,All_RandPred):  
+#     HitRate_ = Hitrate_Eval(Holdout,Random_pred,user_column,item_column)
+#     AllSteps_Hitrate.append(HitRate_)
+
+#   LowerBand, Avg_HitRate, UpperBand  = mean_confidence_interval(AllSteps_Hitrate, confidence=0.95)
+#   print("Average HitRate for All Recommendations: ", Avg_HitRate)
+#   return AllSteps_Hitrate, LowerBand, Avg_HitRate, UpperBand
+
+def TopN_RandomPred(RatingMat,user_column,N):  
+    N_users,N_items = RatingMat.shape   
+    PVVT_RandScores = np.random.rand(N_users,N_items)   ##Assigns random scores to items
+    users_column = RatingMat.nonzero()[0]
+    items_column = RatingMat.nonzero()[1]
+    args = np.array([users_column,items_column])
+    np.put(PVVT_RandScores, np.ravel_multi_index(args, PVVT_RandScores.shape),-np.inf)   ##downsample previously 
+    TopN_pred = np.apply_along_axis(topN_Index, 1,PVVT_RandScores,n = N)
+    return TopN_pred
+
+def get_ALLRandPred(RatingMat_List,user_column,N):
+    All_RandPred = []
+    for RatingMat in tqdm(RatingMat_List):  
+        Rand_pred =  TopN_RandomPred(RatingMat,user_column, N)
+        All_RandPred.append(Rand_pred)
+    return All_RandPred
 
 def getAll_RandomHitRate(HOLDOUT_list,All_RandPred,user_column,item_column):
-  AllSteps_Hitrate = []
-  for Holdout, Random_pred in zip(HOLDOUT_list,All_RandPred):  
-    HitRate_ = Hitrate_Eval(Holdout,Random_pred,user_column,item_column)
-    AllSteps_Hitrate.append(HitRate_)
+    AllSteps_Hitrate = []
+    for Holdout, Random_pred in zip(HOLDOUT_list,All_RandPred):  
+        TestUsers = Holdout[user_column]
+        HOLDOUT_RandPred = Random_pred[TestUsers,:]    
+        HitRate_ = Hitrate_Eval(Holdout,HOLDOUT_RandPred,user_column,item_column)
+        #HitRate_ = Sample_Hitrate(Holdout,HOLDOUT_RandPred,user_column,item_column)
+        AllSteps_Hitrate.append(HitRate_)
+    LowerBand, Avg_HitRate, UpperBand  = mean_confidence_interval(AllSteps_Hitrate, confidence=0.95)
+    print("Average HitRate for All Recommendations: ", Avg_HitRate)
+    return AllSteps_Hitrate, LowerBand, Avg_HitRate, UpperBand
 
-  LowerBand, Avg_HitRate, UpperBand  = mean_confidence_interval(AllSteps_Hitrate, confidence=0.95)
-  print("Average HitRate for All Recommendations: ", Avg_HitRate)
-  return AllSteps_Hitrate, LowerBand, Avg_HitRate, UpperBand
+def getAll_RandomRecMRR(HOLDOUT_list,All_RandPred,user_column,item_column):
+    AllSteps_MRR = []
+    for Holdout, Random_pred in tqdm(zip(HOLDOUT_list,All_RandPred)):  
+        TestUsers = Holdout[user_column]
+        HOLDOUT_RandPred = Random_pred[TestUsers,:]    
+        MRR_ = MRR_Eval(Holdout,HOLDOUT_RandPred,item_column)
+        AllSteps_MRR.append(round(MRR_,6))
 
-def TopN_RandomPred_2(RatingMat,user_column,N):  
-  N_users,N_items = RatingMat.shape   
-  PVVT_RandScores = np.random.rand(N_users,N_items)   ##Assigns random scores to items
-  users_column = RatingMat.nonzero()[0]
-  items_column = RatingMat.nonzero()[1]
-  args = np.array([users_column,items_column])
-  np.put(PVVT_RandScores, np.ravel_multi_index(args, PVVT_RandScores.shape),-np.inf)   ##downsample previously seen items
-  TopN_pred = np.apply_along_axis(topN_Index, 1,PVVT_RandScores,n = N)
-  return TopN_pred
-
-def get_ALLRandPred_2(RatingMat_List,user_column,N):
-  All_RandPred = []
-  for RatingMat in tqdm(RatingMat_List):  
-    Rand_pred =  TopN_RandomPred_2(RatingMat,user_column, N)
-    All_RandPred.append(Rand_pred)
-  return All_RandPred
+    LowerBand, Avg_MRR, UpperBand  = mean_confidence_interval(AllSteps_MRR, confidence=0.95)
+    return AllSteps_MRR, LowerBand, Avg_MRR, UpperBand       
 
 
-def getAll_RandomHitRate_2(HOLDOUT_list,All_RandPred,user_column,item_column):
-  AllSteps_Hitrate = []
-  for Holdout, Random_pred in zip(HOLDOUT_list,All_RandPred):  
-    TestUsers = Holdout[user_column]
-    HOLDOUT_RandPred = Random_pred[TestUsers,:]    
-    HitRate_ = Hitrate_Eval(Holdout,HOLDOUT_RandPred,user_column,item_column)
-    #HitRate_ = Sample_Hitrate(Holdout,HOLDOUT_RandPred,user_column,item_column)
-    AllSteps_Hitrate.append(HitRate_)
+def getAll_VAEMRR(HOLDOUT_list,All_VAEPred,user_column,item_column):
+    AllSteps_MRR = []
+    for Holdout, VAE_pred in tqdm(zip(HOLDOUT_list,All_VAEPred)):  
+        TestUsers = Holdout[user_column]
+        HOLDOUT_VAEPred = VAE_pred[TestUsers,:]    
+        MRR_ = MRR_Eval(Holdout,HOLDOUT_VAEPred,item_column)
+        AllSteps_MRR.append(round(MRR_,6))
 
-  LowerBand, Avg_HitRate, UpperBand  = mean_confidence_interval(AllSteps_Hitrate, confidence=0.95)
-  print("Average HitRate for All Recommendations: ", Avg_HitRate)
-  return AllSteps_Hitrate, LowerBand, Avg_HitRate, UpperBand
-
+    LowerBand, Avg_MRR, UpperBand  = mean_confidence_interval(AllSteps_MRR, confidence=0.95)
+    return AllSteps_MRR, LowerBand, Avg_MRR, UpperBand 
 
 
 """### 4.Most POP Rec"""
 
-def getMOSTPOP_Pred(DF,holdout,user_column,item_colum,N):  ##get the most popular item at a particular step
-  top_counts= DF.groupby(item_colum)[user_column].count()    
-  top_items = top_counts.sort_values(ascending=False) 
-  MostPOP_Items = top_items[:N].index.values
-  Nusers = holdout[user_column].nunique()  
-  MostPOP_Pred = np.array([MostPOP_Items,]*Nusers)
-  return MostPOP_Pred
+def getMOSTPOP_Pred(DF,user_column,item_colum,Nusers,N):  ##get the most popular item at a particular step
+    top_counts= DF.groupby(item_colum)[user_column].count()    
+    top_items = top_counts.sort_values(ascending=False) 
+    MostPOP_Items = top_items[:N].index.values
+    MostPOP_Pred = np.array([MostPOP_Items,]*Nusers)
+    return MostPOP_Pred
 
-def getAll_MOSTPOP_Pred(DF_list,HOLDOUT_list,user_column,item_colum,N):
-  All_MostPOPRED_List = []
-  for DF,holdout in zip(DF_list,HOLDOUT_list):
-    MostPOP_Pred = getMOSTPOP_Pred(DF,holdout,user_column,item_colum,N)
-    All_MostPOPRED_List.append(MostPOP_Pred) 
-  return All_MostPOPRED_List
+def getAll_MOSTPOP_Pred(DF_list,user_column,item_colum,Nusers,N):
+    All_MostPOPRED_List = []
+    for DF in DF_list:
+        MostPOP_Pred = getMOSTPOP_Pred(DF,user_column,item_colum,Nusers,N)
+        All_MostPOPRED_List.append(MostPOP_Pred) 
+    return All_MostPOPRED_List
 
 def getAll_MostPOPHitRate(HOLDOUT_list,All_MostPOPRED_List,user_column,item_column):
-  AllSteps_Hitrate = []
-  for Holdout, MostPOP_pred in zip(HOLDOUT_list,All_MostPOPRED_List): 
-    HitRate_ = Hitrate_Eval(Holdout,MostPOP_pred,user_column,item_column)
-    AllSteps_Hitrate.append(HitRate_)
-  LowerBand, Avg_HitRate, UpperBand  = mean_confidence_interval(AllSteps_Hitrate, confidence=0.95)
-  print("Average HitRate for All Recommendations: ", Avg_HitRate)
-  return AllSteps_Hitrate, LowerBand, Avg_HitRate, UpperBand    
+    AllSteps_Hitrate = []
+    for Holdout, MostPOP_pred in zip(HOLDOUT_list,All_MostPOPRED_List): 
+        TestUsers = Holdout[user_column]
+        Holdout_MPPred = MostPOP_pred[TestUsers,:]    
+        HitRate_ = Hitrate_Eval(Holdout,Holdout_MPPred,user_column,item_column)
+        AllSteps_Hitrate.append(HitRate_)
+    LowerBand, Avg_HitRate, UpperBand  = mean_confidence_interval(AllSteps_Hitrate, confidence=0.95)
+    print("Average HitRate for All Recommendations: ", Avg_HitRate)
+    return AllSteps_Hitrate, LowerBand, Avg_HitRate, UpperBand  
+
 
 def getAll_MostPOPHitRate2(HOLDOUT_list,All_MostPOPRED_List,user_column,item_column):
-  AllSteps_Hitrate = []
-  for Holdout, MostPOP_pred in zip(HOLDOUT_list,All_MostPOPRED_List): 
-    TestUsers = Holdout[user_column]
-    Holdout_MostPOPred =  MostPOP_pred[TestUsers,:]  ##previous step prediction 
-    HitRate_ = Sample_Hitrate(Holdout,Holdout_MostPOPred,user_column,item_column)
-    AllSteps_Hitrate.append(HitRate_)
-  LowerBand, Avg_HitRate, UpperBand  = mean_confidence_interval(AllSteps_Hitrate, confidence=0.95)
-  return AllSteps_Hitrate, LowerBand, Avg_HitRate, UpperBand
+    AllSteps_Hitrate = []
+    for Holdout, MostPOP_pred in zip(HOLDOUT_list,All_MostPOPRED_List): 
+        TestUsers = Holdout[user_column]
+        Holdout_MostPOPred =  MostPOP_pred[TestUsers,:]  ##previous step prediction 
+        HitRate_ = Sample_Hitrate(Holdout,Holdout_MostPOPred,user_column,item_column)
+        AllSteps_Hitrate.append(HitRate_)
+    LowerBand, Avg_HitRate, UpperBand  = mean_confidence_interval(AllSteps_Hitrate, confidence=0.95)
+    return AllSteps_Hitrate, LowerBand, Avg_HitRate, UpperBand
+
+
+def getAll_MostPOP_MRR(HOLDOUT_list,All_MostPOPRED_List,user_column,item_column):
+    AllSteps_MRR = []
+    for Holdout, MostPOP_pred in tqdm(zip(HOLDOUT_list,All_MostPOPRED_List)): 
+        TestUsers = Holdout[user_column]
+        Holdout_MostPOPred =  MostPOP_pred[TestUsers,:]   
+        MRR_ = MRR_Eval(Holdout,Holdout_MostPOPred,item_column)
+        AllSteps_MRR.append(MRR_)
+    LowerBand, Avg_MRR, UpperBand  = mean_confidence_interval(AllSteps_MRR, confidence=0.95)
+    return AllSteps_MRR, LowerBand, Avg_MRR, UpperBand 
+
+## Coverage:
+def StepCoverage_Ratio(DF,Step_Pred,item_column):
+  nItems_tot  = DF[item_column].nunique()
+  nPred_items = len(np.unique(Step_Pred))
+  coverage_ratio = round((nPred_items/nItems_tot),6)
+  return coverage_ratio
+
+def AllSteps_Coverage_Ratio(DF,All_Pred,item_column):
+  Avg_Coverage_List = []
+  for Step_Pred in All_Pred:
+    step_CI = StepCoverage_Ratio(DF,Step_Pred,item_column)
+    Avg_Coverage_List.append(step_CI)
+  return Avg_Coverage_List
+
+
+

@@ -68,7 +68,9 @@ def Time_DataSplit(DF,time_column,pivotMonths_list,N_TMonths,n_train):
     ΔA_test = ΔA_list[n_train:]   
     return A0_df,ΔA_train,ΔA_test
 
-def TestTrain_DataSplit(DF,user_column,time_column,pivotMonths_list,ΔA_test):
+
+
+def TestTrain_DataSplit(DF,user_column,time_column,ΔA_test):
     AllDF_list  =  []
     PSITest_list = []
     HOLDOUT_list = []
@@ -138,7 +140,32 @@ def All_SingleStepRatMat(DFList,user_column,item_column):
         Rating_matrix_list.append(df_Mat)
     return Rating_matrix_list               #return the list of Rating matrices
 
-#################################################################################
+
+#######################################################################
+#######################################################################
+def SingleStepRatMat_2(DF,user_column,item_column):  ##rows_ = n_users,cols_ = n_items
+    rows_ = DF[user_column].max()+1 
+    cols_ = DF[item_column].max()+1 
+    
+    rows0 = DF[user_column].values
+    cols0 = DF[item_column].values
+    data  = np.broadcast_to(1., DF.shape[0]) # ignore ratings
+
+    A0_Rating_matrix = coo_matrix((data, (rows0, cols0)), shape=(rows_, cols_)).tocsr()
+    if A0_Rating_matrix.nnz < len(data):
+        A0_Rating_matrix = A0_Rating_matrix._with_data(np.broadcast_to(1., A0_Rating_matrix.nnz), copy=False)
+
+    return A0_Rating_matrix
+
+def AllSingleStepRatMat_2(DFList,user_column,item_column):
+    Rating_matrix_list = []
+    for df in DFList:
+        df_Mat = SingleStepRatMat_2(df,user_column,item_column)
+        Rating_matrix_list.append(df_Mat)
+    return Rating_matrix_list              
+
+###########################################################################
+###########################################################################
 
 def psiStep_RatMat(DF,All_DF,user_column,item_column):  ##rows_ = n_users,cols_ = n_items
     rows_ = All_DF[user_column].nunique() 
@@ -191,16 +218,15 @@ def Find_NewUsersItems(AllDF_start,AllDF_list,user_column,item_column,N_steps=8)
 
 """### 4.Dataset Adjustments """
 
-def get_NEWHoldout(HOLDOUT_list,userID_dict,itemID_dict,AllUpdtUSERS_,AllUpdtITEMS_,userCol,itemCol,n):
+def get_NEWHoldout(HOLDOUT_list,userID_dict,itemID_dict,AllUpdtUSERS_,AllUpdtITEMS_,user_col,item_col):
     newHOLDOUT_LIST =  []
-    for i in tqdm(range(n)):
-        Updt_Items  =   AllUpdtITEMS_[i]
-        Updt_Users  =   AllUpdtUSERS_[i]     
-        newHOLDOUT_ =   HOLDOUT_list[i].loc[(HOLDOUT_list[i][itemCol].isin(Updt_Items)) & (HOLDOUT_list[i][userCol].isin(Updt_Users))]#
-        newHOLDOUT_ =   newHOLDOUT_[[userCol,itemCol]]
+    for DF,Updt_Users,Updt_Items in tqdm(zip(HOLDOUT_list,AllUpdtUSERS_,AllUpdtITEMS_)):
+        df = DF.copy()
+        newHOLDOUT_ =   df.loc[(df[item_col].isin(Updt_Items)) & (df[user_col].isin(Updt_Users))]#
+        newHOLDOUT_ =   newHOLDOUT_[[user_col,item_col]]
 
-        prevUser_ID =   newHOLDOUT_[userCol].values  #
-        prevItems_ID =  newHOLDOUT_[itemCol].values   #
+        prevUser_ID =   newHOLDOUT_[user_col].values  ##
+        prevItems_ID =  newHOLDOUT_[item_col].values   #
         Updted_UserID = [userID_dict.get(user) for user in prevUser_ID]   
         Updted_ItemID = [itemID_dict.get(item) for item in prevItems_ID]
 
@@ -210,16 +236,15 @@ def get_NEWHoldout(HOLDOUT_list,userID_dict,itemID_dict,AllUpdtUSERS_,AllUpdtITE
     return  newHOLDOUT_LIST
 
 
-def adjustedAllDF(AllDF_list,userID_dict,itemID_dict,AllUpdtUSERS_,AllUpdtITEMS_,userCol,itemCol,n):
+def adjustedAllDF(AllDF_list,userID_dict,itemID_dict,AllUpdtUSERS_,AllUpdtITEMS_,user_col,item_col):
     newAllDF_list =[]
-    for i in range(n):
-        AllDF_list[i] = AllDF_list[i][[userCol,itemCol]]
-        Updt_Items    = AllUpdtITEMS_[i]
-        Updt_Users    = AllUpdtUSERS_[i]     
-        allnew_df     = AllDF_list[i].loc[(AllDF_list[i][itemCol].isin(Updt_Items)) & (AllDF_list[i][userCol].isin(Updt_Users))]
+    for DF, Updt_Users, Updt_Items in tqdm(zip(AllDF_list,AllUpdtUSERS_,AllUpdtITEMS_)):
+        df = DF.copy()
+        df = df[[user_col,item_col]]
+        allnew_df     = df.loc[(df[item_col].isin(Updt_Items)) & (df[user_col].isin(Updt_Users))]
 
-        prevUser_ID =   allnew_df[userCol].values  
-        prevItems_ID =  allnew_df[itemCol].values   
+        prevUser_ID =   allnew_df[user_col].values  
+        prevItems_ID =  allnew_df[item_col].values   
         Updted_UserID = [userID_dict.get(user) for user in prevUser_ID]   
         Updted_ItemID = [itemID_dict.get(item) for item in prevItems_ID]
         allnew_df['Updated_UserID'] = Updted_UserID
@@ -227,22 +252,22 @@ def adjustedAllDF(AllDF_list,userID_dict,itemID_dict,AllUpdtUSERS_,AllUpdtITEMS_
         newAllDF_list.append(allnew_df)
     return newAllDF_list
 
-def adjustedPSI_DF(PSITest_list,userID_dict,itemID_dict,AllUpdtUSERS_,AllUpdtITEMS_,userCol,itemCol,n):
+def adjustedPSI_DF(PSITest_list,userID_dict,itemID_dict,AllUpdtUSERS_,AllUpdtITEMS_,user_col,item_col):
     new_PSIDFlist =[]
-    for i in range(n):
-        PSITest_list[i] = PSITest_list[i][[userCol,itemCol]]
-        Updt_Items    = AllUpdtITEMS_[i]
-        Updt_Users    = AllUpdtUSERS_[i]     
-        new_PSIdf     = PSITest_list[i].loc[(PSITest_list[i][itemCol].isin(Updt_Items)) & (PSITest_list[i][userCol].isin(Updt_Users))]
+    for DF, Updt_Users, Updt_Items in tqdm(zip(PSITest_list,AllUpdtUSERS_,AllUpdtITEMS_)):
+        df = DF.copy()
+        df = df[[user_col,item_col]]
+        new_PSIdf     = df.loc[(df[item_col].isin(Updt_Items)) & (df[user_col].isin(Updt_Users))]
 
-        prevUser_ID =   new_PSIdf[userCol].values  
-        prevItems_ID =  new_PSIdf[itemCol].values   
+        prevUser_ID =   new_PSIdf[user_col].values  
+        prevItems_ID =  new_PSIdf[item_col].values   
         Updted_UserID = [userID_dict.get(user) for user in prevUser_ID]   
         Updted_ItemID = [itemID_dict.get(item) for item in prevItems_ID]
         new_PSIdf['Updated_UserID'] = Updted_UserID
         new_PSIdf['Updated_ItemID'] = Updted_ItemID
         new_PSIDFlist.append(new_PSIdf)
     return new_PSIDFlist
+
 
 
 def ADJUST_mainDF(AMZB_DF,userID_dict,itemID_dict,AllUpdtUSERS_,AllUpdtITEMS_,userCol,itemCol):
