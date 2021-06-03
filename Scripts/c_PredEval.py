@@ -94,6 +94,33 @@ def TQDMgetALLTopNPred_ALLUSERS(RatingMat_List,V_list,N):
     All_TOPN_PRED.append(TopN_pred)
   return All_TOPN_PRED
 
+
+
+##Tuning:
+# def HitrEval_noprint(Holdout,TopN_pred,user_column,item_column):
+#     Eval_itemsVector  =  Holdout[[item_column]].to_numpy()
+#     HitRate_arr   =  (TopN_pred == Eval_itemsVector).sum(axis=1)  ##sum along row...
+#     HitCount = np.count_nonzero(HitRate_arr == 1)
+#     HitRate_ = HitRate_arr.mean()
+#     return HitRate_
+
+# def SVDoptimalSearch(RatingMat,holdout,user_column,item_column,start,end,increment,N=10):
+#     AllHitrate = []
+#     max_hit = 0 
+#     for rank in tqdm(range(start,end+1,increment)): 
+#         Usvd, Ssvd, VTsvd = svds(RatingMat, k=rank)
+#         Vsvd = VTsvd.T
+#         top_k = TopNPred(RatingMat,holdout,Vsvd, user_column, N)
+#         hit_r = HitrEval_noprint(holdout,top_k,user_column,item_column)
+#         AllHitrate.append(hit_r)
+#         if hit_r > max_hit:
+#            max_hit =  hit_r
+#            max_rank = rank
+#            print("\n Max Rank: {} | HitRate:{}".format(max_rank, max_hit))
+#     print("\n Best-Params; Max Rank: {} | HitRate: {}".format(max_rank, max_hit))    
+#     return AllHitrate,max_hit,max_rank
+
+
 """### 2.Evaluation"""
 
 def Hitrate_Eval(Holdout,TopN_pred,user_column,item_column):
@@ -167,55 +194,48 @@ def TQDMgetAll_MRR_Eval(HOLDOUT_list,All_TOPN_PRED,item_column):
     return AllSteps_MRR, LowerBand, Avg_MRR, UpperBand    
 
 ######################################################################################
+# """### implicit ALS ###"""
+# def topN_Index(a, n):
+#     parted = np.argpartition(a, -n)[-n:]
+#     return parted[np.argsort(-a[parted])]
 
+# def ials_TopNPred(RatingMat,holdout,users_vec,items_vec,user_column, N):  #N == Top_N
+#     TestUsers = holdout[user_column]            #prediction for holdout users alone
+#     HOLDOUT_usersMat = RatingMat[TestUsers,:]   #this doubles as the "previously seen items"
+#     testusers_vec = users_vec[TestUsers, :]
+#     PVVT =  testusers_vec.dot(items_vec.T) 
+#     #PVVT =  HOLDOUT_usersMat.dot(items_vec).dot(items_vec.T) 
+#     users_column = HOLDOUT_usersMat.nonzero()[0]
+#     items_column = HOLDOUT_usersMat.nonzero()[1]
+#     args = np.array([users_column,items_column])
+#     np.put(PVVT, np.ravel_multi_index(args, PVVT.shape),-np.inf)   #downsample previously seen items
+#     TopN_pred = np.apply_along_axis(topN_Index, 1,PVVT,n = N)
+#     return TopN_pred
 
+# def ials_getALLPred(RatingMat_List,HOLDOUT_list,U_list,V_list,user_column,N):
+#     All_TOPN_PRED = []
+#     for RatMat,holdout,users_vec,items_vec in zip(RatingMat_List,HOLDOUT_list,U_list,V_list):
+#         TopN_pred =  ials_TopNPred(RatMat,holdout,users_vec,items_vec,user_column, N)  
+#         All_TOPN_PRED.append(TopN_pred)
+#     return All_TOPN_PRED
 
+# def ials_ALLUSERSpred(RatingMat,users_vec,items_vec,N):  ##Prediction for all users ...||Not just Holdout
+#     PVVT =  users_vec.dot(items_vec.T) 
+#     #PVVT =  RatingMat.dot(items_vec).dot(items_vec.T) 
+#     users_column = RatingMat.nonzero()[0]
+#     items_column = RatingMat.nonzero()[1]
+#     args = np.array([users_column,items_column])
+#     np.put(PVVT, np.ravel_multi_index(args, PVVT.shape),-np.inf)   ##downsample previously seen items
+#     TopN_pred = np.apply_along_axis(topN_Index, 1,PVVT,n = N)
+#     return TopN_pred
 
-
-"""### implicit ALS ###"""
-def ials_TopNPred(RatingMat,holdout,users_vec,items_vec,user_column, N):  #N == Top_N
-    TestUsers = holdout[user_column]            #prediction for holdout users alone
-    HOLDOUT_usersMat = RatingMat[TestUsers,:]   #this doubles as the "previously seen items"
-    testusers_vec = users_vec[TestUsers, :]
-    PVVT =  testusers_vec.dot(items_vec.T) 
-    users_column = HOLDOUT_usersMat.nonzero()[0]
-    items_column = HOLDOUT_usersMat.nonzero()[1]
-    args = np.array([users_column,items_column])
-    np.put(PVVT, np.ravel_multi_index(args, PVVT.shape),-np.inf)   #downsample previously seen items
-    TopN_pred = np.apply_along_axis(topN_Index, 1,PVVT,n = N)
-    return TopN_pred
-
-def ials_getALLPred(RatingMat_List,HOLDOUT_list,U_list,V_list,user_column,N):
-    All_TOPN_PRED = []
-    for RatMat,holdout,users_vec,items_vec in zip(RatingMat_List,HOLDOUT_list,U_list,V_list):
-        TopN_pred =  ials_TopNPred(RatMat,holdout,users_vec,items_vec,user_column, N)  
-        All_TOPN_PRED.append(TopN_pred)
-    return All_TOPN_PRED
-
-
-def ials_getALLPredTQDM(RatingMat_List,HOLDOUT_list,U_list,V_list,user_column,N):
-    All_TOPN_PRED = []
-    for RatMat,holdout,users_vec,items_vec in tqdm(zip(RatingMat_List,HOLDOUT_list,U_list,V_list)):  
-        TopN_pred = ials_TopNPred(RatMat,holdout,users_vec,items_vec,user_column, N)
-        All_TOPN_PRED.append(TopN_pred)
-    return All_TOPN_PRED
-
-
-def ials_ALLUSERSpred(RatingMat,users_vec,items_vec,N):  ##Prediction for all users ...||Not just Holdout
-    PVVT =  users_vec.dot(items_vec.T) 
-    users_column = RatingMat.nonzero()[0]
-    items_column = RatingMat.nonzero()[1]
-    args = np.array([users_column,items_column])
-    np.put(PVVT, np.ravel_multi_index(args, PVVT.shape),-np.inf)   ##downsample previously seen items
-    TopN_pred = np.apply_along_axis(topN_Index, 1,PVVT,n = N)
-    return TopN_pred
-
-def ialsALLPred_ALLUSERS(RatingMat_List,U_list,V_list,N):
-    All_TOPN_PRED = []
-    for RatMat,users_vec,items_vec in zip(RatingMat_List,U_list,V_list):  
-        TopN_pred = ials_ALLUSERSpred(RatMat,users_vec,items_vec,N) 
-        All_TOPN_PRED.append(TopN_pred)
-    return All_TOPN_PRED
+# def ialsALLPred_ALLUSERS(RatingMat_List,U_list,V_list,N):
+#     All_TOPN_PRED = []
+#     for RatMat,users_vec,items_vec in zip(RatingMat_List,U_list,V_list):  
+#         TopN_pred = ials_ALLUSERSpred(RatMat,users_vec,items_vec,N) 
+#         All_TOPN_PRED.append(TopN_pred)
+#     return All_TOPN_PRED
+# ##########################################################################3
 
 def TQDM_ialsALLPred_ALLUSERS(RatingMat_List,V_list,N):
     All_TOPN_PRED = []
@@ -224,10 +244,12 @@ def TQDM_ialsALLPred_ALLUSERS(RatingMat_List,V_list,N):
         All_TOPN_PRED.append(TopN_pred)
     return All_TOPN_PRED
 
-
-
-
-
+def ials_getALLPredTQDM(RatingMat_List,HOLDOUT_list,U_list,V_list,user_column,N):
+    All_TOPN_PRED = []
+    for RatMat,holdout,users_vec,items_vec in tqdm(zip(RatingMat_List,HOLDOUT_list,U_list,V_list)):  
+        TopN_pred = ials_TopNPred(RatMat,holdout,users_vec,items_vec,user_column, N)
+        All_TOPN_PRED.append(TopN_pred)
+    return All_TOPN_PRED
 
 
 

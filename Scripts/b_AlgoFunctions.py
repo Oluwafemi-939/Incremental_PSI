@@ -17,6 +17,7 @@ import pandas as pd
 import datetime as dt
 import seaborn as sns
 from tqdm import tqdm
+from tqdm import trange
 import itertools
 import scipy.stats as st
 import scipy.sparse as sparse
@@ -86,84 +87,144 @@ def pureSVD(SVDRatingMatrices, k):
         Vsvd_list.append(Vsvd)
     return Vsvd_list
 
+###################################################################################################
+#SVDTuning
+###################################################################################################
 
-"""### implicit ALS#####"""
+def topN_Index(a, n):
+    parted = np.argpartition(a, -n)[-n:]
+    return parted[np.argsort(-a[parted])]    
 
-def auc_score(predictions, test):
-    fpr, tpr, thresholds = metrics.roc_curve(test, predictions)
-    return metrics.auc(fpr, tpr)
+def TopNPred(RatingMat,holdout,V, user_column, N):  ##N == Top_N
+    TestUsers = holdout[user_column]
+    HOLDOUT_usersMat = RatingMat[TestUsers,:]         ##this doubles as the "previously seen items"
+    PVVT =  HOLDOUT_usersMat.dot(V).dot(V.T) 
+    users_column = HOLDOUT_usersMat.nonzero()[0]
+    items_column = HOLDOUT_usersMat.nonzero()[1]
+    args = np.array([users_column,items_column])
+    np.put(PVVT, np.ravel_multi_index(args, PVVT.shape),-np.inf)   ##downsample previously seen items
+    TopN_pred = np.apply_along_axis(topN_Index, 1,PVVT,n = N)
+    return TopN_pred
 
-                                                  ##takes rating matrix and masks a certain 20% 
-                                                  ##of the user-item interaction
-def TrainTest(ratings_matrix,pct_mask=0.2):
-    test_set = ratings_matrix.copy()              #making a copy of the rating matrix as text_set
-    test_set[test_set!=0]=1                       #storing this as a binary preference matrix 
+def HitrEval_noprint(Holdout,TopN_pred,user_column,item_column):
+    Eval_itemsVector  =  Holdout[[item_column]].to_numpy()
+    HitRate_arr   =  (TopN_pred == Eval_itemsVector).sum(axis=1)  ##sum along row...
+    HitCount = np.count_nonzero(HitRate_arr == 1)
+    HitRate_ = HitRate_arr.mean()
+    return HitRate_
 
-    train_set = ratings_matrix.copy() 
-    nonzero_inds = train_set.nonzero()            #get indices where interaction actually exist
-    nonzero_pairs = list(zip(nonzero_inds[0],     #user-item indices into list
-                          nonzero_inds[1]))   
-    random.seed(0) 
-    num_samples = int(np.ceil(pct_mask*len(nonzero_pairs)))  #num of samples to mask
-    samples = random.sample(nonzero_pairs, num_samples) 
+def SVDoptimalSearch(RatingMat,holdout,user_column,item_column,start,end,increment,N=10):
+    AllHitrate = []
+    max_hit = 0 
+    for rank in tqdm(range(start,end+1,increment)): 
+        Usvd, Ssvd, VTsvd = svds(RatingMat, k=rank)
+        Vsvd = VTsvd.T
+        top_k = TopNPred(RatingMat,holdout,Vsvd, user_column, N)
+        hit_r = HitrEval_noprint(holdout,top_k,user_column,item_column)
+        AllHitrate.append(hit_r)
+        if hit_r > max_hit:
+           max_hit =  hit_r
+           max_rank = rank
+           print("\n Max Rank: {} | HitRate:{}".format(max_rank, max_hit))
+    print("\n Best-Params; Max Rank: {} | HitRate: {}".format(max_rank, max_hit))    
+    return AllHitrate,max_hit,max_rank
 
+###################################################################################################
+#iALS Tuning
+###################################################################################################
 
-    user_inds = [i[0] for i in samples]             #Get the user row indices
-    item_inds = [i[1] for i in samples]            # Get the item column indices
-    train_set[user_inds, item_inds] = 0            # Assign all of the randomly chosen user-item pairs to zero
-    train_set.eliminate_zeros()                    # Get rid of zeros in sparse array storage after update to save space
-    return train_set, test_set, list(set(user_inds)) # Output the unique list of use
-
-
-def mean_auc(train_set,test_set,latent_features,masked_users) :
-    user_AUC = []
-    item_vectors = latent_features[1]                     #item latent features: matrix_V    
-    for user in masked_users:
-        train_row  = train_set[user,:].toarray().reshape(-1)  ##for each user in the training set
-        zero_index = np.where(train_row==0)                   ##get the index where interaction has not yet occurred 
-                                                              #extract the user latent features... 
-        user_vector = latent_features[0][user,:]              #get me each row in the predicted rating matrix--> 
-                                                              #user latent features: matrix_U
-        pred_ = user_vector.dot(item_vectors).toarray()[0,zero_index].reshape(-1)  #user prediction
-        actual_ = test_set[user,:].toarray()[0,zero_index].reshape(-1) 
-                                                            #to test with our system recommending popular item for every user
-        user_AUC.append(auc_score(pred_,actual_))
-        AVG_test_AUC = float('%.6f'%np.mean(user_AUC)) 
-    return AVG_test_AUC
-
-
-def tune_ALS(train_set,test_set,validation_set,als_param_grid):
-    best_auc   = 0
+def TuneALS_2(train_set,holdout,als_param_grid):
+    best_hr   = -np.inf
     best_model = None
-    for i in tqdm(range(len(als_param_grid))):
-        alpha, reg, rank, iter = list(als_param_grid)[i]   
+    for i in trange(len(als_param_grid)):
+        alpha, reg, rank, iter = list(als_param_grid)[i]  
         ALSmodel = implicit.als.AlternatingLeastSquares(
                    factors=rank, regularization=reg, iterations=iter,use_gpu = False)
         #train ALS model
         Item_UsersMAT = (train_set.T * alpha).astype('double')
-        ALSmodel.fit(Item_UsersMAT, show_progress=True)                
-        user_vecs = ALSmodel.user_factors
-        item_vecs = ALSmodel.item_factors                                              
-        ##############        ##############                              
-        user_vecs_csr = sparse.csr_matrix(user_vecs)       #converting the ALS output to csr_matrix ,
-        item_vecs_csr = sparse.csr_matrix(item_vecs.T)     #and transposing th eitem vectors:
-        latent_features = [user_vecs_csr,item_vecs_csr]
-        test_auc  =  mean_auc(train_set,test_set,latent_features,validation_set)   #masked_users == VALIDATION SET
+        ALSmodel.fit(Item_UsersMAT, show_progress=False)                
+        users_vecs = ALSmodel.user_factors
+        items_vecs = ALSmodel.item_factors                                              
+        ##############        ##############  users_vecs
+        top10_pred = ials_TopNPred(train_set,holdout,users_vecs,items_vecs,'Updated_UserID', N=10) 
+        test_hr = HitrEval_noprint(holdout,top10_pred,'Updated_UserID','Updated_ItemID')  #                           
 
-        print('latent factors= {} ,regularization = {}:, n_iter = {}, alpha = {}, AUC= {}'.format(rank,reg,iter,alpha,test_auc))
-        if test_auc > best_auc:
-           best_auc  = test_auc
+        print('latent factors= {} ,reg_ = {}:, n_iter = {}, alpha = {}, HR= {}'.format(rank,reg,iter,alpha,test_hr))
+        if test_hr > best_hr:
+           best_hr  = test_hr
            best_rank = rank
            best_reg  = reg
            best_iter = iter
            best_alpha = alpha
            best_model = ALSmodel
-    print('\n Best model; latent factors= {} , regularization = {}, n_iter = {}, alpha = {}, AUC = {}'.format(best_rank,
-                                                                              best_reg, best_iter,best_alpha,best_auc))
-    return best_rank, best_reg, best_iter,best_alpha,best_auc,best_model
+    print('\n Best model; latent_factors= {} , reg_ = {}, n_iter = {}, alpha = {}, HR = {}'.format(best_rank,
+                                                                              best_reg, best_iter,best_alpha,best_hr))
+    return best_rank, best_reg, best_iter,best_alpha,best_hr,best_model    
+
+######################################################################################
 
 
 
+
+
+"""### implicit ALS#####"""
+
+
+######################################################
+def topN_Index(a, n):
+    parted = np.argpartition(a, -n)[-n:]
+    return parted[np.argsort(-a[parted])]
+
+def ials_TopNPred(RatingMat,holdout,users_vec,items_vec,user_column, N):  #N == Top_N
+    TestUsers = holdout[user_column]            #prediction for holdout users alone
+    HOLDOUT_usersMat = RatingMat[TestUsers,:]   #this doubles as the "previously seen items"
+    testusers_vec = users_vec[TestUsers, :]
+    ##PVVT =  testusers_vec.dot(items_vec.T) 
+    PVVT =  HOLDOUT_usersMat.dot(items_vec).dot(items_vec.T) 
+    users_column = HOLDOUT_usersMat.nonzero()[0]
+    items_column = HOLDOUT_usersMat.nonzero()[1]
+    args = np.array([users_column,items_column])
+    np.put(PVVT, np.ravel_multi_index(args, PVVT.shape),-np.inf)   #downsample previously seen items
+    TopN_pred = np.apply_along_axis(topN_Index, 1,PVVT,n = N)
+    return TopN_pred
+
+def HitrEval_noprint(Holdout,TopN_pred,user_column,item_column):
+    Eval_itemsVector  =  Holdout[[item_column]].to_numpy()
+    HitRate_arr   =  (TopN_pred == Eval_itemsVector).sum(axis=1)  ##sum along row...
+    HitCount = np.count_nonzero(HitRate_arr == 1)
+    HitRate_ = HitRate_arr.mean()
+    return HitRate_
+
+def TuneALS(train_set,holdout,als_param_grid):
+    best_hr   = -np.inf
+    best_model = None
+    for i in trange(len(als_param_grid)):
+        alpha, reg, rank, iter = list(als_param_grid)[i]  
+        ALSmodel = implicit.als.AlternatingLeastSquares(
+                   factors=rank, regularization=reg, iterations=iter,use_gpu = False)
+        #train ALS model
+        Item_UsersMAT = (train_set.T * alpha).astype('double')
+        ALSmodel.fit(Item_UsersMAT, show_progress=False)                
+        users_vecs = ALSmodel.user_factors
+        items_vecs = ALSmodel.item_factors                                              
+        ##############        ##############  users_vecs
+        top10_pred = ials_TopNPred(train_set,holdout,users_vecs,items_vecs,'Updated_UserID', N=10) 
+        test_hr = HitrEval_noprint(holdout,top10_pred,'Updated_UserID','Updated_ItemID')  #                           
+
+        print('latent factors= {} ,reg_ = {}:, n_iter = {}, alpha = {}, HR= {}'.format(rank,reg,iter,alpha,test_hr))
+        if test_hr > best_hr:
+           best_hr  = test_hr
+           best_rank = rank
+           best_reg  = reg
+           best_iter = iter
+           best_alpha = alpha
+           best_model = ALSmodel
+    print('\n Best model; latent_factors= {} , reg_ = {}, n_iter = {}, alpha = {}, HR = {}'.format(best_rank,
+                                                                              best_reg, best_iter,best_alpha,best_hr))
+    return best_rank, best_reg, best_iter,best_alpha,best_hr,best_model    
+
+
+#################################################################################################3
 
 def nonzeros(m, row):
     for index in range(m.indptr[row], m.indptr[row+1]):
@@ -218,13 +279,13 @@ def alternating_least_squares_cg(Cui,nuser_list,nItem_list,factors,alpha,reglr,i
     return U_list, V_list
      
 
-
-def getiALS_VUlist(bst_Model,UserItem_RatMAT,alpha):
+def getiALS_VUlist(UserItem_RatMAT,rank,iter,reg,alpha):
     V_list = []
     U_list = []
     for RatMAT in tqdm(UserItem_RatMAT):
+        bst_Model = implicit.als.AlternatingLeastSquares(factors=rank, regularization=reg, iterations=iter,use_gpu = False)
         Item_UsersMAT = (RatMAT.T*alpha).astype('double')
-        bst_Model.fit(Item_UsersMAT, show_progress=True)                
+        bst_Model.fit(Item_UsersMAT, show_progress=False)                
         user_vecs = bst_Model.user_factors
         item_vecs = bst_Model.item_factors
         V_list.append(item_vecs)
@@ -582,3 +643,81 @@ def ALLSTEPs_UPDATE(AllDF_start,AllDF_list,New_itemsList,New_usersList,U_list,S_
 
     return DItems_, DUsers_,In_DomainUSERS,In_DomainITEMS,userID_dict,itemID_dict,AllUpdtUSERS_List,AllUpdtITEMS_List,U_list,S_list,V_list 
     
+
+
+
+
+
+
+# def auc_score(predictions, test):
+#     fpr, tpr, thresholds = metrics.roc_curve(test, predictions)
+#     return metrics.auc(fpr, tpr)
+
+#                                                   ##takes rating matrix and masks a certain 20% 
+#                                                   ##of the user-item interaction
+# def TrainTest(ratings_matrix,pct_mask=0.2):
+#     test_set = ratings_matrix.copy()              #making a copy of the rating matrix as text_set
+#     test_set[test_set!=0]=1                       #storing this as a binary preference matrix 
+
+#     train_set = ratings_matrix.copy() 
+#     nonzero_inds = train_set.nonzero()            #get indices where interaction actually exist
+#     nonzero_pairs = list(zip(nonzero_inds[0],     #user-item indices into list
+#                           nonzero_inds[1]))   
+#     random.seed(0) 
+#     num_samples = int(np.ceil(pct_mask*len(nonzero_pairs)))  #num of samples to mask
+#     samples = random.sample(nonzero_pairs, num_samples) 
+
+
+#     user_inds = [i[0] for i in samples]             #Get the user row indices
+#     item_inds = [i[1] for i in samples]            # Get the item column indices
+#     train_set[user_inds, item_inds] = 0            # Assign all of the randomly chosen user-item pairs to zero
+#     train_set.eliminate_zeros()                    # Get rid of zeros in sparse array storage after update to save space
+#     return train_set, test_set, list(set(user_inds)) # Output the unique list of use
+
+
+# def mean_auc(train_set,test_set,latent_features,masked_users) :
+#     user_AUC = []
+#     item_vectors = latent_features[1]                     #item latent features: matrix_V    
+#     for user in masked_users:
+#         train_row  = train_set[user,:].toarray().reshape(-1)  ##for each user in the training set
+#         zero_index = np.where(train_row==0)                   ##get the index where interaction has not yet occurred 
+#                                                               #extract the user latent features... 
+#         user_vector = latent_features[0][user,:]              #get me each row in the predicted rating matrix--> 
+#                                                               #user latent features: matrix_U
+#         pred_ = user_vector.dot(item_vectors).toarray()[0,zero_index].reshape(-1)  #user prediction
+#         actual_ = test_set[user,:].toarray()[0,zero_index].reshape(-1) 
+#                                                             #to test with our system recommending popular item for every user
+#         user_AUC.append(auc_score(pred_,actual_))
+#         AVG_test_AUC = float('%.6f'%np.mean(user_AUC)) 
+#     return AVG_test_AUC
+
+
+# def tune_ALS(train_set,test_set,validation_set,als_param_grid):
+#     best_auc   = 0
+#     best_model = None
+#     for i in tqdm(range(len(als_param_grid))):
+#         alpha, reg, rank, iter = list(als_param_grid)[i]   
+#         ALSmodel = implicit.als.AlternatingLeastSquares(
+#                    factors=rank, regularization=reg, iterations=iter,use_gpu = False)
+#         #train ALS model
+#         Item_UsersMAT = (train_set.T * alpha).astype('double')
+#         ALSmodel.fit(Item_UsersMAT, show_progress=True)                
+#         user_vecs = ALSmodel.user_factors
+#         item_vecs = ALSmodel.item_factors                                              
+#         ##############        ##############                              
+#         user_vecs_csr = sparse.csr_matrix(user_vecs)       #converting the ALS output to csr_matrix ,
+#         item_vecs_csr = sparse.csr_matrix(item_vecs.T)     #and transposing th eitem vectors:
+#         latent_features = [user_vecs_csr,item_vecs_csr]
+#         test_auc  =  mean_auc(train_set,test_set,latent_features,validation_set)   #masked_users == VALIDATION SET
+
+#         print('latent factors= {} ,regularization = {}:, n_iter = {}, alpha = {}, AUC= {}'.format(rank,reg,iter,alpha,test_auc))
+#         if test_auc > best_auc:
+#            best_auc  = test_auc
+#            best_rank = rank
+#            best_reg  = reg
+#            best_iter = iter
+#            best_alpha = alpha
+#            best_model = ALSmodel
+#     print('\n Best model; latent factors= {} , regularization = {}, n_iter = {}, alpha = {}, AUC = {}'.format(best_rank,
+#                                                                               best_reg, best_iter,best_alpha,best_auc))
+#     return best_rank, best_reg, best_iter,best_alpha,best_auc,best_model

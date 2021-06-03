@@ -47,8 +47,8 @@ def split_users(raw_data,user_col,n_heldout_users):
     test_users = unique_uid[(n_users - n_heldout_users):]
     return train_users, valid_users, test_users
 
-def split_train_test(data, test_prop=0.2):
-    data_grouped_by_user = data.groupby('userId')
+def split_train_test(data,usercol, test_prop=0.2):
+    data_grouped_by_user = data.groupby(usercol)
     tr_list, te_list = list(), list()
 
     np.random.seed(98765)

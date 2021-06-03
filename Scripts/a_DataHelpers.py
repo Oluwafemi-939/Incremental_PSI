@@ -143,9 +143,9 @@ def All_SingleStepRatMat(DFList,user_column,item_column):
 
 #######################################################################
 #######################################################################
-def SingleStepRatMat_2(DF,user_column,item_column):  ##rows_ = n_users,cols_ = n_items
-    rows_ = DF[user_column].max()+1 
-    cols_ = DF[item_column].max()+1 
+def SingleStepRatMat_2(DF,U,V,user_column,item_column):  ##rows_ = n_users,cols_ = n_items
+    rows_ = U.shape[0]
+    cols_ = V.shape[0] 
     
     rows0 = DF[user_column].values
     cols0 = DF[item_column].values
@@ -157,10 +157,10 @@ def SingleStepRatMat_2(DF,user_column,item_column):  ##rows_ = n_users,cols_ = n
 
     return A0_Rating_matrix
 
-def AllSingleStepRatMat_2(DFList,user_column,item_column):
+def AllSingleStepRatMat_2(DFList,Ulist,Vlist,user_column,item_column):
     Rating_matrix_list = []
-    for df in DFList:
-        df_Mat = SingleStepRatMat_2(df,user_column,item_column)
+    for DF,U,V, in zip(DFList,Ulist,Vlist):
+        df_Mat = SingleStepRatMat_2(DF,U,V,user_column,item_column)
         Rating_matrix_list.append(df_Mat)
     return Rating_matrix_list              
 
